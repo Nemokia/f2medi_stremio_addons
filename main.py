@@ -7,6 +7,13 @@ Flow: Stremio stream request -> Cinemeta metadata -> F2MediaResolver
 from __future__ import annotations
 
 import logging
+import os
+import platform
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,7 +150,15 @@ def get_streams(type: str, id: str):
         })
 
     logger.info("[APP] returning %d stream(s)", len(stremio_streams))
+    if playing_hook:
+        try:
+            playing_hook(f"{title}" + (f" S{season}E{episode}" if season else ""))
+        except Exception:
+            pass
     return {"streams": stremio_streams}
+
+
+playing_hook = None  # GUI sets this to a callable(str) to show what's playing
 
 
 @app.get("/")
@@ -151,5 +166,248 @@ def health():
     return {"status": "ok", "addon": "F2Medi", "version": "3.0.0"}
 
 
+ADDON_URL = "stremio://127.0.0.1:8081/manifest.json"
+
+
+def _is_wsl() -> bool:
+    """Detect if running inside WSL."""
+    if "microsoft" in platform.release().lower():
+        return True
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+STREMIO_EXE_NAMES = ["Stremio.exe", "stremio-shell-ng.exe", "stremio-runtime.exe"]
+
+
+def _find_stremio_wsl() -> str | None:
+    """Find Stremio.exe on Windows filesystem from WSL."""
+    mnt_users = list(Path("/mnt/c/Users").glob("*"))
+    windows_names = [
+        "Program Files",
+        "Program Files (x86)",
+    ]
+    localappdata_rel = "AppData/Local"
+
+    exact_subpaths = [
+        "Programs/Stremio",
+        "Stremio",
+    ]
+
+    for user_dir in mnt_users:
+        if not user_dir.is_dir() or user_dir.name.startswith("."):
+            continue
+        local = user_dir / localappdata_rel
+        for sub in exact_subpaths:
+            for exe_name in STREMIO_EXE_NAMES:
+                candidate = local / sub / exe_name
+                if candidate.is_file():
+                    return str(candidate)
+        for wf in windows_names:
+            for exe_name in STREMIO_EXE_NAMES:
+                pf = Path(f"/mnt/c/{wf}")
+                candidate = pf / "Stremio" / exe_name
+                if candidate.is_file():
+                    return str(candidate)
+
+    # Glob fallback
+    for mount in Path("/mnt").glob("*/Users/*/AppData/Local"):
+        for exe_name in STREMIO_EXE_NAMES:
+            for match in mount.glob(f"**/{exe_name}"):
+                return str(match)
+
+    return None
+
+
+def _find_stremio_linux() -> str | None:
+    """Find Stremio binary on Linux."""
+    candidates = [
+        "stremio",
+        "/usr/bin/stremio",
+        "/usr/local/bin/stremio",
+        "/opt/Stremio/stremio",
+        "/opt/stremio/stremio",
+    ]
+    # snap
+    snap_stremio = Path("/snap/bin/stremio")
+    if snap_stremio.exists():
+        return str(snap_stremio)
+
+    # .desktop file Exec line
+    desktop_dirs = [
+        Path.home() / ".local/share/applications",
+        Path("/usr/share/applications"),
+        Path("/var/lib/snapd/desktop/applications"),
+    ]
+    for d in desktop_dirs:
+        for f in d.glob("*stremio*.desktop"):
+            try:
+                for line in f.read_text().splitlines():
+                    if line.startswith("Exec="):
+                        exe = line.split("=", 1)[1].split()[0]
+                        if os.path.isfile(exe):
+                            return exe
+            except OSError:
+                continue
+
+    # flatpak
+    try:
+        result = subprocess.run(
+            ["flatpak", "list", "--app", "--columns=application"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "stremio" in line.lower():
+                return f"flatpak run {line.strip()}"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # PATH lookup
+    for c in candidates:
+        parts = c.split()
+        try:
+            subprocess.run(
+                parts + ["--version"],
+                capture_output=True, timeout=5,
+            )
+            return c
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+
+    return None
+
+
+def _find_stremio_windows() -> str | None:
+    """Find Stremio.exe on Windows."""
+    local = os.environ.get("LOCALAPPDATA", "")
+    appdata = os.environ.get("APPDATA", "")
+    pf = os.environ.get("PROGRAMFILES", "")
+    pf86 = os.environ.get("PROGRAMFILES(X86)", "")
+    userProfile = os.environ.get("USERPROFILE", "")
+
+    exact_dirs = [
+        os.path.join(local, "Programs", "Stremio"),
+        os.path.join(local, "Stremio"),
+        os.path.join(pf, "Stremio"),
+        os.path.join(pf86, "Stremio"),
+        os.path.join(appdata, "Local", "Programs", "Stremio"),
+        os.path.join(userProfile, "AppData", "Local", "Programs", "Stremio"),
+    ]
+    for d in exact_dirs:
+        for exe_name in STREMIO_EXE_NAMES:
+            p = os.path.join(d, exe_name)
+            if os.path.isfile(p):
+                return p
+
+    # Glob search in common root directories
+    glob_roots = [local, pf, pf86, userProfile]
+    for root in glob_roots:
+        if not root:
+            continue
+        for exe_name in STREMIO_EXE_NAMES:
+            for match in Path(root).glob(f"**/{exe_name}"):
+                return str(match)
+
+    return None
+
+
+def launch_stremio() -> None:
+    """Launch Stremio application."""
+    system = platform.system()
+    addon_msg = (
+        "\n  To install the addon, open this URL in Stremio:\n"
+        f"  {ADDON_URL}\n"
+    )
+    try:
+        if system == "Linux":
+            if _is_wsl():
+                # Running in WSL — find and launch Windows Stremio.exe
+                exe = _find_stremio_wsl()
+                if not exe:
+                    logger.warning(
+                        "[LAUNCH] Stremio not found on Windows.%s"
+                        "  Install: https://www.stremio.com/download",
+                        addon_msg,
+                    )
+                    return
+                # Launch via cmd.exe so the Windows GUI opens properly
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", "", exe],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # Native Linux
+                binary = _find_stremio_linux()
+                if not binary:
+                    logger.warning(
+                        "[LAUNCH] Stremio not found.%s"
+                        "  Install: https://www.stremio.com/download",
+                        addon_msg,
+                    )
+                    return
+                cmd = binary.split() if " " in binary else [binary]
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+
+        elif system == "Darwin":
+            subprocess.Popen(
+                ["open", "-a", "Stremio"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+        elif system == "Windows":
+            exe = _find_stremio_windows()
+            if exe:
+                subprocess.Popen(
+                    [exe],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                # fallback: try PATH
+                try:
+                    subprocess.Popen(
+                        ["stremio"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except FileNotFoundError:
+                    logger.warning(
+                        "[LAUNCH] Stremio not found.%s"
+                        "  Install: https://www.stremio.com/download",
+                        addon_msg,
+                    )
+                    return
+        else:
+            logger.warning("[LAUNCH] unsupported OS: %s", system)
+            return
+
+        logger.info("[LAUNCH] Stremio launched successfully")
+        logger.info("[LAUNCH] addon URL: %s", ADDON_URL)
+
+    except FileNotFoundError:
+        logger.warning(
+            "[LAUNCH] Stremio not found.%s"
+            "  Install: https://www.stremio.com/download",
+            addon_msg,
+        )
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8081)
+    def _run_server():
+        uvicorn.run(app, host="127.0.0.1", port=8081)
+
+    server_thread = threading.Thread(target=_run_server, daemon=True)
+    server_thread.start()
+    time.sleep(1.5)
+    launch_stremio()
+    server_thread.join()

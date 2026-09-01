@@ -221,7 +221,9 @@ curl "http://127.0.0.1:8081/stream/series/tt10986410:2:5.json"
 
 ```
 fardabin_stremio_addons/
-├── main.py                     # ورودی FastAPI: manifest + stream + health
+├── main.py                     # ورودی FastAPI: manifest + stream + health (+ playing_hook برای GUI)
+├── gui.py                      # پنل کنترل مرورگری: Connect/Disconnect + نمایش عنوان در حال پخش
+├── F2Media.bat                 # اجرای gui.py از ویندوز با دابل‌کلیک
 ├── requirements.txt            # fastapi, uvicorn, requests, beautifulsoup4, urllib3
 │
 ├── httpclient/                 # زیرساخت شبکه
@@ -293,6 +295,22 @@ pip install -r requirements.txt
 
 ### گام ۳ — اجرای سرور
 
+**راه ساده (پنجره گرافیکی):**
+
+```bash
+./venv/bin/python gui.py
+```
+
+یک تب مرورگر باز می‌شود (http://localhost:9090) با سه چیز:
+
+- دکمه **Connect** → سرور addon روی `0.0.0.0:8081` بالا می‌آید و Stremio خودکار باز می‌شود
+- دکمه **Disconnect** → سرور متوقف می‌شود
+- نام فیلم/سریالی که همین لحظه از addon درخواست شده، لحظه‌به‌لحظه زیر دکمه‌ها
+
+از ویندوز هم بدون ترمینال: دابل‌کلیک روی `F2Media.bat`.
+
+**راه ترمینالی:**
+
 ```bash
 python main.py
 ```
@@ -312,7 +330,9 @@ uvicorn main:app --host 127.0.0.1 --port 8081 --reload   # --reload فقط بر�
 
 ### (اختیاری) Exposing روی شبکه
 
-به‌صورت پیش‌فرض سرور فقط روی localhost گوش می‌دهد. اگر می‌خواهید از دستگاه دیگری (مثلاً اندروید/تلویزیون) Stremio به آن وصل شود:
+پنل (gui.py) خودش addon را روی `0.0.0.0:8081` بالا می‌آورد — از دستگاه دیگری (اندروید/تلویزیون) آدرس `http://<IP-سرور>:8081/manifest.json` را در Stremio نصب کنید.
+
+اگر سرور را با `python main.py` اجرا می‌کنید، پیش‌فرض localhost است؛ برای دسترسی شبکه:
 
 - یا در `main.py` مقدار `host="127.0.0.1"` را به `host="0.0.0.0"` تغییر دهید؛
 - یا: `uvicorn main:app --host 0.0.0.0 --port 8081`
@@ -321,7 +341,11 @@ uvicorn main:app --host 127.0.0.1 --port 8081 --reload   # --reload فقط بر�
 
 > ⚠️ باز کردن `0.0.0.0` یعنی هرکسی در شبکه می‌تواند درخواست بزند؛ برای اینترنت عمومی حتماً پشت reverse proxy با احراز هویت یا محدودسازی IP قرار دهید.
 
-## اتصال به Stremio
+### اتصال به Stremio
+
+**خودکار:** بعد از Connect در پنل (gui.py)، Stremio خودش باز می‌شود و مانیفست را می‌گیرد — نیازی به مراحل زیر نیست.
+
+**دستی:**
 
 1. Stremio را باز کنید → **Add-ons** → نوار جستجو (pencil icon).
 2. آدرس مانیفست را paste کنید:
@@ -405,6 +429,8 @@ ALLOWED_HOSTS = frozenset({"f2medi.top", "www.f2medi.top"})
 سلکتورهای HTML نیز ممکن است تغییر کنند؛ یک صفحهٔ نمونه ذخیره کنید و `resolvers/validator.py` + `parsers/f2medi_parser.py` را مطابق آن تنظیم کنید.
 
 **Port busy** — نمونهٔ دیگری روی ۸۰۸۱ روشن است؟ با `lsof -i :8081` پیدا و ببندیدش، یا با uvicorn port دلخواه بدهید: `uvicorn main:app --port 9090`.
+
+**پنل باز نمی‌شود / مرورگر باز نشد** — gui.py خودش تب مرورگر باز می‌کند؛ اگر نشد، دستی به `http://localhost:9090/` بروید. پورت پنل 9090 است و addon روی 8081 — هردو باید آزاد باشند.
 
 ## نکات توسعه
 
