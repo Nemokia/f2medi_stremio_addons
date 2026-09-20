@@ -222,8 +222,9 @@ curl "http://127.0.0.1:8081/stream/series/tt10986410:2:5.json"
 ```
 fardabin_stremio_addons/
 ├── main.py                     # ورودی FastAPI: manifest + stream + health (+ playing_hook برای GUI)
-├── gui.py                      # پنل کنترل مرورگری: Connect/Disconnect + نمایش عنوان در حال پخش
-├── F2Media.bat                 # اجرای gui.py از ویندوز با دابل‌کلیک
+| `gui.py`                      # پنل کنترل **Native Windows (tkinter)**: Connect/Disconnect + لاگ زنده + عنوان در حال پخش
+| `gui_backend.py`              # سرور کنترل داخلی WSL (FastAPI روی پورت 9090) — توسط gui.py فراخوانی می‌شود
+├── F2Media.bat                 # لانچر ویندوز: بدون پنجره CMD، با pythonw اجرا می‌شود
 ├── requirements.txt            # fastapi, uvicorn, requests, beautifulsoup4, urllib3
 │
 ├── httpclient/                 # زیرساخت شبکه
