@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 # Add project to path
-PROJECT_ROOT = Path("/home/hidi-sylvie-ubuntu/project/fardabin_stremio_addons").resolve()
+PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import main as addon

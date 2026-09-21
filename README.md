@@ -222,8 +222,8 @@ curl "http://127.0.0.1:8081/stream/series/tt10986410:2:5.json"
 ```
 fardabin_stremio_addons/
 ├── main.py                     # ورودی FastAPI: manifest + stream + health (+ playing_hook برای GUI)
-| `gui.py`                      # پنل کنترل **Native Windows (tkinter)**: Connect/Disconnect + لاگ زنده + عنوان در حال پخش
-| `gui_backend.py`              # سرور کنترل داخلی WSL (FastAPI روی پورت 9090) — توسط gui.py فراخوانی می‌شود
+├── gui.py                      # پنل کنترل **Native Windows (tkinter)**: مسیر خودکار + Connect/Disconnect + لاگ زنده
+├── gui_backend.py              # سرور کنترل داخلی WSL (FastAPI روی پورت 9090) — توسط gui.py فراخوانی می‌شود
 ├── F2Media.bat                 # لانچر ویندوز: بدون پنجره CMD، با pythonw اجرا می‌شود
 ├── requirements.txt            # fastapi, uvicorn, requests, beautifulsoup4, urllib3
 │
@@ -273,13 +273,14 @@ fardabin_stremio_addons/
 | Python | **3.10+** (تست‌شده روی 3.12) |
 | pip | همراه پایتون |
 | Git | برای clone مخزن |
+| WSL | برای اجرای GUI از ویندوز (اختیاری) |
 | شبکه | دسترسی به `f2medi.top` و `v3-cinemeta.strem.io` |
 
 ### گام ۱ — دریافت کد
 
 ```bash
-git clone git@github.com:Nemokia/f2medi_stremio_addons.git
-cd f2medi_stremio_addons
+git clone https://github.com/Nemokia/fardabin_stremio_addons.git
+cd fardabin_stremio_addons
 ```
 
 ### گام ۲ — ساخت محیط مجازی و نصب وابستگی‌ها
@@ -296,19 +297,21 @@ pip install -r requirements.txt
 
 ### گام ۳ — اجرای سرور
 
-**راه ساده (پنجره گرافیکی):**
+**راه ساده (پنجره گرافیکی — ویندوز):**
 
 ```bash
 ./venv/bin/python gui.py
 ```
 
-یک تب مرورگر باز می‌شود (http://localhost:9090) با سه چیز:
+یا از ویندوز دابل‌کلیک روی `F2Media.bat`.
+
+پنل GUI باز می‌شود و مسیر پروژه را **خودکار** تشخیص می‌دهد — نیازی به تنظیم دستی مسیر نیست. فقط کافیست:
 
 - دکمه **Connect** → سرور addon روی `0.0.0.0:8081` بالا می‌آید و Stremio خودکار باز می‌شود
 - دکمه **Disconnect** → سرور متوقف می‌شود
 - نام فیلم/سریالی که همین لحظه از addon درخواست شده، لحظه‌به‌لحظه زیر دکمه‌ها
 
-از ویندوز هم بدون ترمینال: دابل‌کلیک روی `F2Media.bat`.
+> 💡 GUI از مکان فایل `gui.py` مسیر WSL را به‌صورت خودکار محاسبه می‌کند. پروژه را هرجا clone کنید کار می‌کند.
 
 **راه ترمینالی:**
 
@@ -432,6 +435,8 @@ ALLOWED_HOSTS = frozenset({"f2medi.top", "www.f2medi.top"})
 **Port busy** — نمونهٔ دیگری روی ۸۰۸۱ روشن است؟ با `lsof -i :8081` پیدا و ببندیدش، یا با uvicorn port دلخواه بدهید: `uvicorn main:app --port 9090`.
 
 **پنل باز نمی‌شود / مرورگر باز نشد** — gui.py خودش تب مرورگر باز می‌کند؛ اگر نشد، دستی به `http://localhost:9090/` بروید. پورت پنل 9090 است و addon روی 8081 — هردو باید آزاد باشند.
+
+**GUI مسیر پروژه را پیدا نمی‌کند** — مطمئن شوید پروژه را در مسیری که شامل فاصله نیست clone کرده‌اید. اگر مشکل باقی ماند، مسیر در `gui.py` را به‌صورت دستی تنظیم کنید.
 
 ## نکات توسعه
 

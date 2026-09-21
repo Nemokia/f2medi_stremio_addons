@@ -24,9 +24,19 @@ from tkinter import ttk, scrolledtext
 
 # ─── paths & constants ────────────────────────────────────────────────────
 ADDON_PORT = 8081
-WSL_PROJECT = Path("/home/hidi-sylvie-ubuntu/project/fardabin_stremio_addons").resolve()
-WSL_VENV_PYTHON = WSL_PROJECT / "venv" / "bin" / "python"
-WSL_GUI_ENTRY = WSL_PROJECT / "gui_backend.py"  # small FastAPI control server running in WSL
+
+
+def _detect_wsl_project() -> str:
+    """Auto-detect project dir and convert Windows path → WSL /mnt/... path."""
+    win_dir = Path(__file__).resolve().parent  # e.g. D:\My projects\project\fardabin_stremio_addons
+    drive = win_dir.drive[0].lower()            # "D"
+    rest = str(win_dir)[len(win_dir.drive):]    # "\My projects\project\fardabin_stremio_addons"
+    return f"/mnt/{drive}{rest}".replace("\\", "/")
+
+
+WSL_PROJECT = _detect_wsl_project()
+WSL_VENV_PYTHON = f"{WSL_PROJECT}/venv/bin/python"
+WSL_GUI_ENTRY = f"{WSL_PROJECT}/gui_backend.py"
 
 # ─── shared log queue ─────────────────────────────────────────────────────
 log_queue: "queue.Queue[str]" = queue.Queue()
