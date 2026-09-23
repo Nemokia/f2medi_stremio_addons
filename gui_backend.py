@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-WSL-side backend for F2Media Addon GUI.
+Backend for F2Media Addon GUI.
 
-Runs in WSL (via wsl.exe from Windows GUI). Exposes a small FastAPI control API:
+Runs as a subprocess (called by gui.py). Exposes a small FastAPI control API:
 - POST /api/connect   → starts the addon server (main.py) on port 8081
 - POST /api/disconnect → stops the addon server
 - GET  /api/playing    → returns current playing title
 - GET  /api/logs       → streams addon server logs (SSE or simple JSON)
 
-The Windows GUI calls these endpoints to control the addon lifecycle.
+Works in both WSL and standalone (PyInstaller frozen EXE) modes.
 """
 from __future__ import annotations
 import threading
@@ -17,16 +17,20 @@ import logging
 import sys
 from pathlib import Path
 
+# ─── frozen / source detection ────────────────────────────────────────────
+if getattr(sys, "frozen", False):
+    # Running inside PyInstaller bundle — all source files are in _MEIPASS
+    PROJECT_ROOT = Path(sys._MEIPASS)
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import main as addon
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-
-# Add project to path
-PROJECT_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-import main as addon
 
 # ─── logging ──────────────────────────────────────────────────────────────
 logging.basicConfig(

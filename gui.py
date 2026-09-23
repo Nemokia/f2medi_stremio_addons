@@ -2,10 +2,14 @@
 """
 F2Media Stremio Addon - Native Windows GUI (tkinter)
 
-Default mode: double-click → GUI opens, service OFF.
-User clicks Connect → starts addon server in WSL + launches Stremio.
-User clicks Disconnect / closes window → kills addon server completely.
+Default mode: double-click -> GUI opens, service OFF.
+User clicks Connect -> starts addon server locally or in WSL + launches Stremio.
+User clicks Disconnect / closes window -> kills addon server completely.
 Logs stream into the GUI's log panel (no external CMD window needed).
+
+Runs in two modes:
+  1. Standalone EXE (PyInstaller frozen): launches F2Media.exe --backend locally
+  2. Source / WSL: launches gui_backend.py via WSL
 
 Run from Windows:  python gui.py
 Run from WSL (via WSLg):  ./venv/bin/python gui.py  (requires tkinter in venv)
@@ -20,20 +24,41 @@ import os
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import scrolledtext
 
-# ─── paths & constants ────────────────────────────────────────────────────
+# ─── frozen / source detection ────────────────────────────────────────────
+FROZEN = getattr(sys, "frozen", False)
 ADDON_PORT = 8081
 
 
+def _detect_project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+def _get_local_ip() -> str:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 def _detect_wsl_project() -> str:
-    """Auto-detect project dir and convert Windows path → WSL /mnt/... path."""
-    win_dir = Path(__file__).resolve().parent  # e.g. D:\My projects\project\fardabin_stremio_addons
-    drive = win_dir.drive[0].lower()            # "D"
-    rest = str(win_dir)[len(win_dir.drive):]    # "\My projects\project\fardabin_stremio_addons"
+    win_dir = _detect_project_root()
+    if not win_dir.drive:
+        return str(win_dir)
+    drive = win_dir.drive[0].lower()
+    rest = str(win_dir)[len(win_dir.drive):]
     return f"/mnt/{drive}{rest}".replace("\\", "/")
 
 
+PROJECT_ROOT = _detect_project_root()
 WSL_PROJECT = _detect_wsl_project()
 WSL_VENV_PYTHON = f"{WSL_PROJECT}/venv/bin/python"
 WSL_GUI_ENTRY = f"{WSL_PROJECT}/gui_backend.py"
@@ -43,14 +68,11 @@ log_queue: "queue.Queue[str]" = queue.Queue()
 
 
 def log(msg: str) -> None:
-    """Thread-safe log push."""
     log_queue.put(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 
-# ─── backend control (runs in WSL) ────────────────────────────────────────
+# ─── backend control ──────────────────────────────────────────────────────
 class AddonBackend:
-    """Manages the addon server process inside WSL."""
-
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
         self.monitor_thread: threading.Thread | None = None
@@ -60,28 +82,20 @@ class AddonBackend:
         if self.running:
             log("Backend already running")
             return True
-
-        # Kill any leftover
         self.stop()
 
-        # Launch the backend control server in WSL
-        # It exposes /api/connect, /api/disconnect, /api/playing, /api/logs
-        # Pass the command as a single quoted string to bash -lc
-        # Use single quotes around the whole command to prevent Windows path mangling
-        wsl_cmd = (
-            f"cd '{WSL_PROJECT}' && "
-            f"'{WSL_VENV_PYTHON}' '{WSL_GUI_ENTRY}'"
-        )
-        cmd = ["wsl.exe", "-e", "bash", "-lc", wsl_cmd]
-        log(f"Starting backend: {' '.join(cmd)}")
+        if FROZEN:
+            cmd = [sys.executable, "--backend"]
+            log(f"Starting backend (standalone): {sys.executable} --backend")
+        else:
+            wsl_cmd = f"cd '{WSL_PROJECT}' && '{WSL_VENV_PYTHON}' '{WSL_GUI_ENTRY}'"
+            cmd = ["wsl.exe", "-e", "bash", "-lc", wsl_cmd]
+            log(f"Starting backend (WSL): {' '.join(cmd)}")
+
         try:
             self.proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", bufsize=1,
             )
         except Exception as e:
             log(f"Failed to start backend: {e}")
@@ -90,15 +104,12 @@ class AddonBackend:
         self.running = True
         self.monitor_thread = threading.Thread(target=self._monitor_output, daemon=True)
         self.monitor_thread.start()
-
-        # Wait a bit for server to come up, then call /api/connect
         time.sleep(1.5)
         self._call_connect()
         return True
 
     def _call_connect(self) -> None:
-        import urllib.request
-        import json
+        import urllib.request, json
         try:
             req = urllib.request.Request("http://localhost:9090/api/connect", method="POST")
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -139,26 +150,10 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("F2Media Addon")
-        self.geometry("480x560")
-        self.minsize(420, 500)
+        self.geometry("500x620")
+        self.minsize(440, 560)
+        self.configure(bg="#0f1629")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        # Dark theme colors
-        self.bg = "#0f1629"
-        self.panel = "#171f35"
-        self.fg = "#eeeeee"
-        self.accent = "#007DCC"
-        self.accent_hover = "#0096e6"
-        self.danger = "#B2054C"
-        self.danger_hover = "#d40652"
-        self.warn = "#FFB900"
-        self.log_bg = "#0a0f1a"
-        self.log_fg = "#a0c8e8"
-
-        self.configure(bg=self.bg)
-        self.style = ttk.Style(self)
-        self.style.theme_use("clam")
-        self._setup_styles()
 
         self.backend = AddonBackend()
         self.connected = False
@@ -166,69 +161,72 @@ class App(tk.Tk):
         self._build_ui()
         self._poll_logs()
 
-    def _setup_styles(self) -> None:
-        self.style.configure("TFrame", background=self.bg)
-        self.style.configure("TLabel", background=self.bg, foreground=self.fg, font=("Segoe UI", 10))
-        self.style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), foreground="#D10056")
-        self.style.configure("Status.TLabel", font=("Segoe UI", 11))
-        self.style.configure("Connect.TButton", font=("Segoe UI", 11, "bold"), padding=10)
-        self.style.configure("Disconnect.TButton", font=("Segoe UI", 11, "bold"), padding=10)
-        self.style.map(
-            "Connect.TButton",
-            background=[("active", self.accent_hover), ("!disabled", self.accent)],
-            foreground=[("!disabled", "#ffffff")],
-        )
-        self.style.map(
-            "Disconnect.TButton",
-            background=[("active", self.danger_hover), ("!disabled", self.danger)],
-            foreground=[("!disabled", "#ffffff")],
-        )
-
     def _build_ui(self) -> None:
-        # Header
-        header = ttk.Frame(self, padding=20)
-        header.pack(fill="x")
-        ttk.Label(header, text="🎬  F2Media Addon", style="Title.TLabel").pack(anchor="center")
+        # ── Header ──────────────────────────────────────────────────
+        header = tk.Frame(self, bg="#0f1629")
+        header.pack(fill="x", pady=(18, 0))
+        tk.Label(header, text="\U0001f3ac  F2Media Addon", bg="#0f1629",
+                 fg="#D10056", font=("Segoe UI", 18, "bold")).pack()
 
-        # Status
-        self.status_var = tk.StringVar(value="● Disconnected")
-        self.status_lbl = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel", foreground=self.danger)
-        self.status_lbl.pack(pady=(0, 16))
+        # ── Status label ────────────────────────────────────────────
+        self.status_var = tk.StringVar(value="\u25cf Disconnected")
+        self.status_lbl = tk.Label(self, textvariable=self.status_var,
+                                   bg="#0f1629", fg="#B2054C",
+                                   font=("Segoe UI", 12, "bold"))
+        self.status_lbl.pack(pady=(10, 2))
 
-        # Now playing
+        # ── Info box (IP URL + now-playing) above buttons ───────────
+        self.info_frame = tk.Frame(self, bg="#171f35", bd=0, highlightthickness=1,
+                                   highlightbackground="#2a3555")
+        self.info_frame.pack(padx=28, pady=(4, 8), fill="x")
+
+        self.url_var = tk.StringVar(value="")
+        self.url_lbl = tk.Label(self.info_frame, textvariable=self.url_var,
+                                bg="#171f35", fg="#4ade80",
+                                font=("Consolas", 10), cursor="hand2",
+                                anchor="w", padx=10, pady=6)
+        self.url_lbl.pack(fill="x")
+        self.url_lbl.bind("<Button-1>", self._copy_url)
+
         self.playing_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.playing_var, style="Status.TLabel", foreground=self.warn, wraplength=420).pack(pady=(0, 20))
+        self.playing_lbl = tk.Label(self.info_frame, textvariable=self.playing_var,
+                                    bg="#171f35", fg="#FFB900",
+                                    font=("Segoe UI", 10), anchor="w",
+                                    padx=10, wraplength=420)
+        self.playing_lbl.pack(fill="x", pady=(0, 6))
 
-        # Buttons
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(pady=10)
-        self.connect_btn = ttk.Button(
-            btn_frame, text="● Connect", style="Connect.TButton",
-            command=self.on_connect, width=16
-        )
-        self.connect_btn.pack(side="left", padx=8)
-        self.disconnect_btn = ttk.Button(
-            btn_frame, text="■ Disconnect", style="Disconnect.TButton",
-            command=self.on_disconnect, width=16, state="disabled"
-        )
-        self.disconnect_btn.pack(side="left", padx=8)
+        # ── Buttons (plain tk.Button with colors) ───────────────────
+        btn_frame = tk.Frame(self, bg="#0f1629")
+        btn_frame.pack(pady=8)
 
-        # Logs
-        log_frame = ttk.Frame(self, padding=(20, 10, 20, 20))
-        log_frame.pack(fill="both", expand=True)
-        ttk.Label(log_frame, text="Logs", style="Status.TLabel").pack(anchor="w", pady=(0, 6))
+        self.connect_btn = tk.Button(
+            btn_frame, text="\u25cf Connect",
+            bg="#007DCC", fg="white", activebackground="#0096e6", activeforeground="white",
+            font=("Segoe UI", 11, "bold"), relief="flat", padx=20, pady=6,
+            cursor="hand2", command=self.on_connect,
+        )
+        self.connect_btn.pack(side="left", padx=10)
+
+        self.disconnect_btn = tk.Button(
+            btn_frame, text="\u25a0 Disconnect",
+            bg="#B2054C", fg="white", activebackground="#d40652", activeforeground="white",
+            font=("Segoe UI", 11, "bold"), relief="flat", padx=20, pady=6,
+            cursor="hand2", command=self.on_disconnect,
+        )
+        self.disconnect_btn.pack(side="left", padx=10)
+        self.disconnect_btn.configure(state="disabled", bg="#3a3a4a", fg="#888888",
+                                      activebackground="#3a3a4a", activeforeground="#888888")
+
+        # ── Logs ────────────────────────────────────────────────────
+        log_frame = tk.Frame(self, bg="#0f1629")
+        log_frame.pack(fill="both", expand=True, padx=20, pady=(6, 16))
+        tk.Label(log_frame, text="Logs", bg="#0f1629", fg="#a0c8e8",
+                 font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 4))
 
         self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            height=14,
-            bg=self.log_bg,
-            fg=self.log_fg,
-            insertbackground=self.fg,
-            font=("Consolas", 9),
-            relief="flat",
-            borderwidth=0,
-            state="disabled",
-            wrap="word",
+            log_frame, height=12, bg="#0a0f1a", fg="#a0c8e8",
+            insertbackground="#eeeeee", font=("Consolas", 9),
+            relief="flat", borderwidth=0, state="disabled", wrap="word",
         )
         self.log_text.pack(fill="both", expand=True)
         self.log_text.tag_config("error", foreground="#ff6b6b")
@@ -236,9 +234,20 @@ class App(tk.Tk):
         self.log_text.tag_config("info", foreground="#7dd3fc")
         self.log_text.tag_config("success", foreground="#4ade80")
 
-        # Initial log
-        self._append_log("F2Media Addon GUI ready. Click Connect to start.", "info")
+        mode = "standalone" if FROZEN else "source (WSL)"
+        self._append_log(f"F2Media Addon GUI ready ({mode}). Click Connect to start.", "info")
 
+    # ── URL copy ────────────────────────────────────────────────────
+    def _copy_url(self, _event=None) -> None:
+        url = self.url_var.get().replace("  \U0001f517  ", "").replace("  (click to copy)", "").strip()
+        if url:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            old = self.url_var.get()
+            self.url_var.set("  Copied!")
+            self.after(1200, lambda: self.url_var.set(old))
+
+    # ── Log helpers ─────────────────────────────────────────────────
     def _append_log(self, msg: str, tag: str = "") -> None:
         self.log_text.configure(state="normal")
         self.log_text.insert("end", msg + "\n", tag)
@@ -263,9 +272,11 @@ class App(tk.Tk):
             pass
         self.after(100, self._poll_logs)
 
+    # ── Connect / Disconnect ────────────────────────────────────────
     def on_connect(self) -> None:
         self.connect_btn.configure(state="disabled")
-        self._append_log("Starting addon server in WSL...", "info")
+        mode = "locally" if FROZEN else "in WSL"
+        self._append_log(f"Starting addon server {mode}...", "info")
         threading.Thread(target=self._do_connect, daemon=True).start()
 
     def _do_connect(self) -> None:
@@ -275,15 +286,23 @@ class App(tk.Tk):
     def _connect_done(self, ok: bool) -> None:
         if ok:
             self.connected = True
-            self.status_var.set("● Connected")
+            self.status_var.set("\u25cf Connected")
             self.status_lbl.configure(foreground="#007DCC")
-            self.connect_btn.configure(state="disabled")
-            self.disconnect_btn.configure(state="normal")
+            self.connect_btn.configure(state="disabled", bg="#3a3a4a", fg="#888888",
+                                       activebackground="#3a3a4a", activeforeground="#888888")
+            self.disconnect_btn.configure(state="normal", bg="#B2054C", fg="white",
+                                          activebackground="#d40652", activeforeground="white")
             self._append_log("Addon server running on port 8081", "success")
             self._append_log("Launching Stremio...", "info")
-            # Stremio launch is handled by backend
+            local_ip = _get_local_ip()
+            if local_ip != "127.0.0.1":
+                url = f"http://{local_ip}:8081/manifest.json"
+                self.url_var.set(f"  \U0001f517  {url}  (click to copy)")
+            else:
+                self.url_var.set("")
         else:
-            self.connect_btn.configure(state="normal")
+            self.connect_btn.configure(state="normal", bg="#007DCC", fg="white",
+                                       activebackground="#0096e6", activeforeground="white")
             self._append_log("Failed to start backend", "error")
 
     def on_disconnect(self) -> None:
@@ -297,16 +316,19 @@ class App(tk.Tk):
 
     def _disconnect_done(self) -> None:
         self.connected = False
-        self.status_var.set("● Disconnected")
-        self.status_lbl.configure(foreground=self.danger)
+        self.status_var.set("\u25cf Disconnected")
+        self.status_lbl.configure(foreground="#B2054C")
         self.playing_var.set("")
-        self.connect_btn.configure(state="normal")
-        self.disconnect_btn.configure(state="disabled")
+        self.url_var.set("")
+        self.connect_btn.configure(state="normal", bg="#007DCC", fg="white",
+                                   activebackground="#0096e6", activeforeground="white")
+        self.disconnect_btn.configure(state="disabled", bg="#3a3a4a", fg="#888888",
+                                      activebackground="#3a3a4a", activeforeground="#888888")
         self._append_log("Disconnected", "warn")
 
     def on_close(self) -> None:
         if self.connected:
-            self._append_log("Window closed — stopping backend...", "warn")
+            self._append_log("Window closed - stopping backend...", "warn")
             self.backend.stop()
         self.destroy()
 
