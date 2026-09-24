@@ -8,7 +8,9 @@
 
 ## 🚀 شروع سریع (فقط کاربران ویندوز)
 
-> **فایل `F2Media.exe` را دابل‌کلیک کنید → Connect را بزنید → تمام.** نیازی به نصب هیچ چیزی نیست.
+> **فایل `F2Media.exe` را دانلود و دابل‌کلیک کنید → Connect را بزنید → تمام.** نیازی به نصب هیچ چیزی نیست.
+>
+> **[دانلود مستقیم F2Media.exe از GitHub](https://github.com/Nemokia/f2medi_stremio_addons/releases/download/v1.0.0/F2Media.exe)**
 
 ---
 
